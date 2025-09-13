@@ -1,0 +1,52 @@
+
+services:
+  luckypack_universal:
+    build:
+      context: .
+      dockerfile: Dockerfile.app
+    container_name: luckypack_universal
+    working_dir: /app
+    volumes:
+      - /srv/luckypack/data:/app/data
+      - /srv/luckypack/logs:/app/logs
+      - /srv/luckypack/App/LuckyPricer/data:/app/LuckyPricer/data
+    env_file:
+      - /srv/luckypack/.env
+    command: |
+      sh -lc "
+        while :; do
+          python3 -u ClientCards/universal_pars.py 2>&1 | grep -v -x 'Нет файлов для обработки\.'
+          sleep 60
+        done
+      "
+    restart: unless-stopped
+    labels:
+      - "keep=true"
+
+  luckypack_vision:
+    build:
+      context: .
+      dockerfile: Dockerfile.app
+    container_name: luckypack_vision
+    working_dir: /app
+    volumes:
+      - /srv/luckypack/data:/app/data
+      - /srv/luckypack/logs:/app/logs
+      - /srv/luckypack/App/LuckyPricer/data:/app/LuckyPricer/data
+    env_file:
+      - /srv/luckypack/.env
+    command: |
+      sh -lc "
+        echo '[INFO] waiting for incoming_cards...'
+        while [ ! -d /app/data/cards/incoming_cards ]; do
+          sleep 2
+        done
+        echo '[INFO] incoming_cards ready, starting vision loop'
+        while :; do
+          python3 -u ClientCards/vision_entry.py || true
+          sleep 5
+        done
+      "
+    restart: unless-stopped
+    labels:
+      - "keep=true"

@@ -1,0 +1,17 @@
+services:
+  devbot:
+    build:
+      context: .
+      dockerfile: Dockerfile.app
+    working_dir: /app
+    env_file:
+      - /srv/luckypack/.env
+    volumes:
+      - ./:/app:rw
+      - /srv/luckypack/data:/app/data
+      - /srv/luckypack/logs:/app/logs
+      - /srv/luckypack/App/LuckyPricer/data:/app/LuckyPricer/data
+    command: python -m LuckyBot.main
+    restart: unless-stopped
+    labels:
+      - "keep=true"

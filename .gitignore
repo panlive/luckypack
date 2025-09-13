@@ -1,0 +1,86 @@
+
+*~
+*$py.class
+App/**/data/
+App/**/logs/docker-compose.yml.bak_*
+App/**/logs/# === Python bytecode / caches ===
+# === App-specific hints ===
+# === Archives / backups / temp ===
+/backups/
+*.bak
+*.bak_*
+.build/
+build/
+.cache
+.coverage
+.coverage.*
+coverage.xml
+/data/
+data/
+Data/
+develop-eggs/
+dist/
+.dmypy.json
+dmypy.json
+docs/_build/
+downloads/
+.DS_Store
+*.egg
+*.egg-info/
+.eggs/
+eggs/
+**/*.env
+**/.env
+env/
+ENV/
+env.bak/
+!.env.example
+# === Env / secrets (везде) ===
+htmlcov/
+.hypothesis/
+.idea/
+# === IDE / Editor ===
+*.iml
+.installed.cfg
+.ipynb_checkpoints/
+lib/
+lib64/
+/logs/
+logs/
+Logs/
+# === Logs & data (root-level) ===
+.mypy_cache/
+node_modules/
+# === Node (если появится фронт) ===
+nosetests.xml
+# === Notebooks ===
+.nox/
+# === OS junk ===
+# === Packaging / builds ===
+parts/
+Pipfile.lock
+# === Project-specific ===
+__pycache__/
+*.py[cod]
+.pyre/
+.pytest_cache/
+pytestdebug.log
+# === Python bytecode / caches ===
+.python-version
+.pytype/
+*.rar
+sdist/
+/srv/
+/state/
+*.swp
+*.tar
+*.tar.gz
+# === Test / coverage ===
+Thumbs.db
+.tox/
+var/
+venv/
+venv.bak/
+# === Virtual envs ===
+.vscode/
+*.zip

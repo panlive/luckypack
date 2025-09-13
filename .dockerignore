@@ -1,0 +1,28 @@
+# Исключаем git и служебные файлы
+.git
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Исключаем логи
+logs
+*.log
+*.log.*
+
+# Исключаем данные (монтируются томами, а не в образ)
+data/
+backups/
+state/
+run/
+
+# Исключаем тяжёлые артефакты внутри App
+LuckyPricer/data/
+SearchByPhoto/index/
+LuckyBot/data/clients/
+
+# Прочее
+*.tar
+*.tar.gz
+*.zip
+.env
