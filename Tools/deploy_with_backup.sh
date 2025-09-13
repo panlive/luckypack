@@ -75,17 +75,23 @@ INCLUDE=( "App" )
 [[ -f "$ROOT/.env" ]] && INCLUDE+=( ".env" )
 
 EXC=(
+  # кодовые хвосты
   --exclude='App/.git'
   --exclude='App/__pycache__'
   --exclude='App/*.bak' --exclude='App/*.bak.*'
   --exclude='App/quarantine/**'
   --exclude='backups/**'
-  # фото
-  --exclude='data/photos/**'
+
+  # крупные данные/фото и их кэши
+  --exclude='data/photos/**'     # основная фотобаза (все форматы)
   --exclude='data/fotos/**'
   --exclude='data/Photos/**'
   --exclude='data/Fotos/**'
   --exclude='DataFotos/**'
+
+  # кэши пиков (PNG превью)
+  --exclude='data/PhotoPicks/**'   # сюда входит _png и прочие
+  --exclude='data/*/_png/**'       # на всякий случай любые *_png каталоги в data
 )
 ARCHIVE="${BACKUP_DIR}/luckypack-${TS}.tar.gz"
 TMP="${ARCHIVE}.partial"
