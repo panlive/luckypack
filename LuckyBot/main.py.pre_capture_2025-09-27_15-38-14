@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+main.py — Основной файл Telegram-бота LuckyPackBot
+
+-----------------------------------------------------
+Назначение:
+    • Запускает Telegram-бота LuckyPackBot (aiogram)
+    • Ведёт регистрацию, оперирует профилями клиентов (мульти e-mail/телефоны/история)
+    • Логирует и алертит критичные ошибки админу через admin_notify.py
+    • Параметры тянет из config.py
+Архитектура:
+    • Обработчики и сервисы вынесены в handlers/ и отдельные utils
+-----------------------------------------------------
+"""
+
+...
+import os, sys, json, asyncio
+from dotenv import load_dotenv
+
+...
+from aiogram import Bot, Dispatcher, types
+from aiogram.types import InputFile
+from aiogram.utils import executor
+from aiogram.dispatcher import FSMContext
+from aiogram.contrib.fsm_storage.memory import MemoryStorage
+
+from config import TELEGRAM_BOT_TOKEN, SUPERADMIN_ID
+from states.registration_states import Registration
+from admin_notify import notify_admin
+
+# === Абсолютный путь для клиентских JSON (вне App) ===
+LP_CLIENTS_DIR = os.environ.get('LP_CLIENTS_DIR', '/srv/luckypack/data/clients')
+
+def _client_json_path(uid):
+    base = os.path.realpath(LP_CLIENTS_DIR)
+    if '/srv/luckypack/App/' in base:
+        raise RuntimeError(f'Invalid LP_CLIENTS_DIR inside App: {base}')
+    return os.path.join(base, f'{uid}.json')
+
+...
+# (далее — остальная логика бота, FSM регистрации, обработчики и т.д.)
+
+# === Утилиты профиля ===
+
+def load_client(user_id: str) -> dict | None:
+    try:
+        path = _client_json_path(user_id)
+        if not os.path.exists(path):
+            return None
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception as e:
+        # не падаем на читающей ошибке — логируем и возвращаем None
+        try:
+            asyncio.create_task(notify_admin(f"load_client error: {e}"))
+        except Exception:
+            pass
+        return None
+
+
+def save_client(client: dict) -> None:
+    user_id = str(client.get('user_id'))
+    assert user_id and user_id.isdigit(), 'client.user_id должен быть числовым'
+    path = _client_json_path(client['user_id'])
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = f"{path}.tmp"
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(client, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+
+...
+@dp.message_handler(commands=['start'])
+async def cmd_start(message: types.Message):
+    user_id = str(message.from_user.id)
+    try:
+        client = load_client(user_id)
+        name = client.get("name") if client and client.get("name") else message.from_user.first_name
+
+        if client and client.get("is_verified"):
+            import random
+            greetings = [
+                f"Привет, <b>{name}</b>! 👋",
+                f"С возвращением, <b>{name}</b>!",
+                f"Рады видеть вас снова, <b>{name}</b>!",
+            ]
+            greet = random.choice(greetings)
+            await message.answer(greet, parse_mode='HTML')
+            return
+
+        # ... остальная логика регистрации
+
+    except Exception as e:
+        await notify_admin(f"/start error: {e}")
+        await message.answer("⚠️ Временная ошибка. Попробуйте позже.")
+
+...
+# Точка входа
+if __name__ == '__main__':
+    load_dotenv()
+    token = TELEGRAM_BOT_TOKEN
+    if not token:
+        print('ERR: TELEGRAM_BOT_TOKEN пуст', file=sys.stderr)
+        sys.exit(1)
+
+    loop = asyncio.get_event_loop()
+    storage = MemoryStorage()
+    bot = Bot(token=token)
+    dp = Dispatcher(bot, storage=storage)
+
+# --- register_capture_contact_v1 ---
+try:
+    from LuckyBot.handlers.capture_contact import register as _reg_capture_contact
+    _reg_capture_contact(dp)
+    print("[init] capture_contact: registered")
+except Exception as e:
+    print(f"[init] capture_contact: not registered: {e}")
+# --- /register_capture_contact_v1 ---
+
+
+    # Регистрация обработчиков (пример):
+    # from LuckyBot.handlers.capture_contact import register as reg_capture
+    # reg_capture(dp)
+    # ...
+
+    executor.start_polling(dp, skip_updates=True)

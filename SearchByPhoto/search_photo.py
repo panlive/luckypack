@@ -15,7 +15,7 @@ DATA = Path("/app/data/photos")
 EMB  = Path("/srv/luckypack/project/SearchByPhoto/index")
 PROD_JSON = PROJ / "LuckyPricer/products.json"
 PROD_JSONS_DIR = PROJ / "LuckyPricer/data/jsons"
-PNG_CACHE = Path("/app/data/PhotoPicks/_png"); PNG_CACHE.mkdir(parents=True, exist_ok=True)
+PNG_CACHE = Path("/srv/luckypack/data/PhotoPicks/_png"); PNG_CACHE.mkdir(parents=True, exist_ok=True)
 
 # Попытка подключить FAISS (для оффлайн-поиска по уже индексированному артикулу)
 try:
