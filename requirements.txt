@@ -77,3 +77,4 @@ urllib3==2.5.0
 wcwidth==0.2.13
 xlrd==2.0.2
 yarl==1.20.1
+inotify-simple

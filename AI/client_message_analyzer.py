@@ -1,155 +1,146 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-client_message_analyzer.py — Анализатор текстовых сообщений клиента для LuckyPackBot
+client_message_analyzer.py — упрощённый анализатор сообщений клиента.
 
------------------------------------------------------
-Назначение:
-    • Обрабатывает произвольный текст от клиента (если не прислана карточка предприятия).
-    • Извлекает ИНН, телефон, e-mail, а также статус намерения клиента (юридическое лицо, отказ, попытка уйти от идентификации и пр.).
-    • Использует OpenAI GPT (gpt-4o) для гибкого смыслового анализа, чтобы корректно реагировать даже на нечёткие формулировки, опечатки и жаргон.
-    • Возвращает структуру с подробной разбивкой: что найдено, статус, какие поля клиент оставил.
-    • Все действия и ошибки логируются в logs/client_message_analyzer.log.
-    • Критичные ошибки (сбои OpenAI, невозможность разбора) отправляются админу в Telegram (admin_notify.py).
-    • Легко расширяется новыми статусами, полями, сценариями.
+ВАЖНО:
+- Это НЕ старая GPT-версия.
+- Это лёгкая заглушка на регулярках и простых правилах.
+- Её задача — не уронить бота, пока мы переносим логику в RegistrationBrain.
 
-Что происходит шаг за шагом:
-    1. Получает текст от клиента (произвольное сообщение).
-    2. Сначала пробует вытащить ИНН, телефон, e-mail регулярками.
-    3. Если что-то найдено — возвращает статус и найденные значения.
-    4. Если не найдено — обращается к GPT-4o с подробным промптом для смыслового разбора (определяет, как клиент хочет продолжить общение).
-    5. Все этапы и ошибки пишутся в лог.
-    6. Все критичные ошибки дублируются админу LuckyPackBot в Telegram.
+Функция analyze_client_message(text: str) возвращает словарь:
 
-Требования:
-    — admin_notify.py в корне проекта.
-    — В .env прописаны OPENAI_API_KEY, TELEGRAM_BOT_TOKEN, SUPERADMIN_ID.
-    — Каталог logs/ существует (создаётся автоматически).
-
-Статусы (status):
-    - valid_inn — найден валидный ИНН (10 или 12 цифр)
-    - valid_phone — найден валидный телефон
-    - valid_email — найден e-mail
-    - company_info — признаки юрлица, но нет ИНН
-    - card_decline — явно отказался присылать карточку
-    - decline_all — не хочет присылать никаких данных, но хочет продолжить
-    - none — ничего не найдено (пустой или бессмысленный текст)
-    - unknown — не удалось однозначно классифицировать
-
------------------------------------------------------
+{
+    "status": "valid_inn" | "company_info" | "ask_later" |
+              "card_decline" | "decline_all" | "none",
+    "inn": str | None,
+    "phone": str | None,
+    "email": str | None,
+    "extra_comment": str | None,
+}
 """
-import sys, os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-import os
 import re
-import json
-import datetime
-from dotenv import load_dotenv
-import openai
-import traceback
+from typing import Dict, Optional
 
-from admin_notify import notify_admin
 
-# --- Настройки логирования ---
-BASE = os.path.dirname(os.path.abspath(__file__))
-LOG_DIR = os.getenv("LOGS_DIR", "/srv/luckypack/logs")
-os.makedirs(LOG_DIR, exist_ok=True)
-LOG_PATH = os.path.join(LOG_DIR, "client_message_analyzer.log")
-os.makedirs(LOG_DIR, exist_ok=True)
+def _extract_inn(text: str) -> Optional[str]:
+    """
+    Ищем подряд идущие цифры длиной 10 или 12.
+    Берём первый подходящий блок.
+    """
+    for match in re.finditer(r"\d{10,12}", text):
+        inn = match.group(0)
+        if len(inn) in (10, 12):
+            return inn
+    return None
 
-def write_log(msg):
-    ts = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    with open(LOG_PATH, "a", encoding="utf-8") as logf:
-        logf.write(f"[{ts}] {msg}\n")
 
-# --- Загрузка ключа OpenAI ---
-load_dotenv()
-openai.api_key = os.getenv("OPENAI_API_KEY")
+def _extract_phone(text: str) -> Optional[str]:
+    """
+    Примитивный поиск телефона:
+    - хотя бы 10 цифр,
+    - допускаем +, пробелы, тире, скобки.
+    """
+    # Убираем лишнее для анализа
+    cleaned = re.sub(r"[^\d+]", " ", text)
+    # Ищем что-то похожее на номер с 10+ цифрами
+    candidates = cleaned.split()
+    for c in candidates:
+        digits = re.sub(r"\D", "", c)
+        if len(digits) >= 10:
+            return c.strip()
+    return None
 
-# --- Регулярки для извлечения данных ---
-def extract_inn(text: str) -> str | None:
-    match = re.search(r"\b\d{10,12}\b", text)
-    return match.group(0) if match else None
 
-def extract_phone(text: str) -> str | None:
-    match = re.search(r"\+?\d{10,15}", text)
-    return match.group(0) if match else None
+def _extract_email(text: str) -> Optional[str]:
+    """
+    Примитивный поиск e-mail.
+    """
+    match = re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", text)
+    if match:
+        return match.group(0)
+    return None
 
-def extract_email(text: str) -> str | None:
-    match = re.search(r"[\w\.-]+@[\w\.-]+\.\w+", text)
-    return match.group(0) if match else None
 
-# --- Основная функция анализа ---
-def analyze_client_message(message_text: str) -> dict:
-    try:
-        write_log(f"Получено сообщение: {message_text!r}")
+def analyze_client_message(text: str) -> Dict[str, Optional[str]]:
+    """
+    Упрощённый анализ сообщения клиента.
 
-        inn = extract_inn(message_text)
-        phone = extract_phone(message_text)
-        email = extract_email(message_text)
+    Возвращает словарь:
+    - status:
+        - "valid_inn"   — найден ИНН (10 или 12 цифр).
+        - "ask_later"   — клиент пишет "потом", "позже", "сейчас нет" и т.п.
+        - "card_decline"— клиент не хочет давать ИНН, но не посылает нас насовсем.
+        - "decline_all" — клиент явно посылает/отказывается от любых данных.
+        - "none"        — ничего полезного не нашли.
+    - остальные поля — inn/phone/email/extra_comment.
+    """
 
-        if inn:
-            write_log(f"Найден ИНН: {inn}")
-            return {"status": "valid_inn", "inn": inn, "phone": phone, "email": email}
-        if phone:
-            write_log(f"Найден телефон: {phone}")
-            return {"status": "valid_phone", "inn": None, "phone": phone, "email": email}
-        if email:
-            write_log(f"Найден e-mail: {email}")
-            return {"status": "valid_email", "inn": None, "phone": phone, "email": email}
+    original = text or ""
+    t = original.strip()
+    lower = t.lower()
 
-        # --- PROMPT для GPT ---
-        system_prompt = """
-Ты — ассистент в Telegram-боте B2B компании LuckyPack.
+    result: Dict[str, Optional[str]] = {
+        "status": "none",
+        "inn": None,
+        "phone": None,
+        "email": None,
+        "extra_comment": None,
+    }
 
-Тебе прислали текст от клиента. Нужно понять по смыслу, как действовать дальше.
-Возможные ситуации:
-- valid_inn: если явно указан ИНН (10 или 12 цифр)
-- valid_phone: если указан телефон
-- valid_email: если указан e-mail
-- company_info: если есть признаки юрлица (ООО, ИП и т.п.), но нет ИНН
-- card_decline: если клиент отказывается присылать карточку предприятия
-- decline_all: если не хочет присылать ни ИНН, ни карточку, ни контакты, но хочет продолжить общение
-- none: если вообще ничего не понятно или бессмысленный текст
+    # 1) Пробуем найти ИНН
+    inn = _extract_inn(t)
+    if inn:
+        result["status"] = "valid_inn"
+        result["inn"] = inn
+        return result
 
-Ответь строго в формате JSON:
-{"status": "...", "inn": null, "phone": null, "email": null}
+    # 2) Пробуем найти телефон/e-mail
+    phone = _extract_phone(t)
+    email = _extract_email(t)
+    if phone:
+        result["phone"] = phone
+    if email:
+        result["email"] = email
 
-Статус выбери только из предложенных. Если что-то найдено — заполни соответствующее поле.
-""".strip()
+    # 3) "Потом", "сейчас нет", "нет под рукой" и т.п.
+    ask_later_markers = [
+        "потом", "позже", "сейчас нет", "нет под рукой",
+        "как будет", "как найду", "напомни", "напишите позже",
+    ]
+    if any(m in lower for m in ask_later_markers):
+        result["status"] = "ask_later"
+        result["extra_comment"] = original
+        return result
 
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f'Текст клиента: "{message_text.strip()}"'}
-        ]
+    # 4) Явный отказ от ИНН, но ещё не полный посыл (card_decline)
+    decline_inn_markers = [
+        "не буду", "не хочу", "не дам инн", "инн не дам",
+        "инн не хочу", "инн не отправлю",
+    ]
+    if any(m in lower for m in decline_inn_markers):
+        # Если при этом есть телефон или почта — нам хватит для менеджера
+        result["status"] = "card_decline"
+        result["extra_comment"] = original
+        return result
 
-        try:
-            response = openai.ChatCompletion.create(
-                model="gpt-4o",
-                temperature=0.1,
-                messages=messages,
-                max_tokens=200
-            )
-            reply = response.choices[0].message.content.strip()
-            write_log(f"Ответ GPT: {reply}")
-            result = json.loads(reply)
-            return result
-        except Exception as e:
-            err_msg = f"❌ Ошибка при обращении к OpenAI: {e}"
-            write_log(err_msg)
-            write_log(traceback.format_exc())
-            notify_admin(err_msg)
-            return {"status": "unknown", "inn": None, "phone": None, "email": None}
+    # 5) Полный отказ/агрессия (decline_all)
+    hard_decline_markers = [
+        "отстань", "отвалите", "иди нах", "иди на х",
+        "не пишет", "не пиши", "не связывайтесь", "уберите",
+    ]
+    if any(m in lower for m in hard_decline_markers):
+        result["status"] = "decline_all"
+        result["extra_comment"] = original
+        return result
 
-    except Exception as e:
-        err_msg = f"❌ Критическая ошибка анализа сообщения: {e}"
-        write_log(err_msg)
-        write_log(traceback.format_exc())
-        notify_admin(err_msg)
-        return {"status": "unknown", "inn": None, "phone": None, "email": None}
+    # 6) Если ничего не поймали, но есть телефон/e-mail — пусть будет "card_decline"
+    # Это мягко подталкивает старый сценарий к handoff менеджеру.
+    if phone or email:
+        result["status"] = "card_decline"
+        result["extra_comment"] = original
+        return result
 
-# --- Пример теста (если нужен для отладки) ---
-if __name__ == "__main__":
-    text = input("Введите текст клиента:\n> ")
-    result = analyze_client_message(text)
-    print("Результат анализа:", result)
+    # 7) Ничего полезного
+    return result

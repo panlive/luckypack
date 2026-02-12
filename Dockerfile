@@ -7,7 +7,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      build-essential tzdata poppler-utils tesseract-ocr \
+      build-essential \
+      tzdata \
+      poppler-utils \
+      tesseract-ocr \
+      libreoffice \
     && rm -rf /var/lib/apt/lists/*
 
 # ---------- DEV ----------

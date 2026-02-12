@@ -28,7 +28,7 @@ SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
 ALLOWED_PHOTO_EXTENSIONS = [".jpg", ".jpeg", ".png"]
 
 # === Логирование ===
-LOGS_DIR = os.getenv("LOGS_DIR", "/srv/luckypack/logs")
+LOGS_DIR = os.getenv("LOGS_DIR", "/app/logs")
 
 PHOTOS_LOG = os.path.join(LOGS_DIR, "photos.log")
 PARSING_LOG = os.path.join(LOGS_DIR, "parsing.log")

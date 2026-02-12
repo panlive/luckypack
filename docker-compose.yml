@@ -1,21 +1,19 @@
-version: "3.8"
 services:
   luckypack_universal:
     build:
-      context: .
-      dockerfile: Dockerfile.app
+      context: /srv/luckypack/App
+      dockerfile: Dockerfile        # <── было Dockerfile.app
+      target: prod
+    image: app-luckypack_universal
     container_name: luckypack_universal
     working_dir: /app
     env_file:
       - /srv/luckypack/.env
     volumes:
-      # Дублируем маунты /app и /srv на переходный период (почистим позже вместе с кодом)
-      - /srv/luckypack/data:/app/data
       - /srv/luckypack/data:/srv/luckypack/data
       - /srv/luckypack/logs:/app/logs
-      - /srv/luckypack/logs:/srv/luckypack/logs
       - /srv/luckypack/App/LuckyPricer/data:/app/LuckyPricer/data
-    command: ["python3","-u","/app/LuckyBot/main.py"]
+    command: ["python3", "-u", "/app/LuckyBot/main.py"]
     restart: unless-stopped
     labels:
       - "keep=true"

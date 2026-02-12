@@ -31,8 +31,16 @@ bot = Bot(token=TELEGRAM_BOT_TOKEN, parse_mode=types.ParseMode.HTML)
 dp = Dispatcher(bot, storage=MemoryStorage())
 
 # --- регистрация минимального набора хендлеров ---
-from LuckyBot.handlers.registration import register as register_registration
-register_registration(dp)
+
+# Старая регистрация (скриптовая логика v1 — пока остаётся рабочей)
+# from LuckyBot.handlers.registration import register as register_registration
+# register_registration(dp)
+
+# Новая агентная регистрация (RegistrationBrain).
+# Сейчас хендлер-пустышка, позже здесь появится реальная логика.
+from LuckyBot.handlers.registration_agent import register as register_registration_agent
+register_registration_agent(dp)
+
 
 async def on_startup(dispatcher: Dispatcher):
     # Чистый старт без вебхука и без pending updates
@@ -40,6 +48,7 @@ async def on_startup(dispatcher: Dispatcher):
         await bot.delete_webhook(drop_pending_updates=True)
     except Exception:
         pass
+
 
 if __name__ == "__main__":
     executor.start_polling(dp, skip_updates=True, on_startup=on_startup)

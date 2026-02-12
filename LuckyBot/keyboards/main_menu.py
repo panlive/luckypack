@@ -6,14 +6,11 @@ LuckyBot/keyboards/main_menu.py — главное меню бота
 Назначение:
   • Определяет клавиатуру главного меню.
   • Используется во всех хендлерах для возврата в корень.
-  • Экспортирует и функцию main_menu_keyboard(), и переменную main_menu_kb — для совместимости любых импортов.
-Примечания:
-  • Кнопки расположены в один столбец (row_width=1).
+  • Экспортирует функции и переменные для совместимости любых импортов.
 """
 
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# === Основная клавиатура главного меню ===
 def build_main_menu() -> InlineKeyboardMarkup:
     kb = InlineKeyboardMarkup(row_width=1)
     kb.add(InlineKeyboardButton(text="📄 Прайсы", callback_data="menu_prices"))
@@ -25,13 +22,13 @@ def build_main_menu() -> InlineKeyboardMarkup:
     kb.add(InlineKeyboardButton(text="👤 Связь с менеджером", callback_data="menu_manager"))
     return kb
 
-# === Совместимость интерфейсов ===
-# 1) Функция, как в старой схеме
+# Совместимость старых импортов
 def main_menu_keyboard() -> InlineKeyboardMarkup:
     return build_main_menu()
 
-# 2) Переменная, как в новой схеме
-main_menu_kb = build_main_menu()
+# Имя, которое ожидает registration_agent.py
+def get_main_menu() -> InlineKeyboardMarkup:
+    return build_main_menu()
 
-# 3) На всякий случай экспортим и привычное имя
-get_main_menu_kb = build_main_menu
+# Готовый объект клавиатуры (если где-то импортят переменную)
+main_menu_kb = build_main_menu()
