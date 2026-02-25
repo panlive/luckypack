@@ -2,34 +2,61 @@
 # -*- coding: utf-8 -*-
 
 """
-registration_agent.py
-Единый регистрационный сценарий (детерминированный, без ИИ).
+LuckyBot/handlers/registration_agent.py
+Регистрация клиента + живой Guard (с короткой памятью в FSMContext).
 
-Задачи:
-- каноничные тексты
-- строгие этапы
-- без зацикливаний
-- после регистрации — МЕНЮ
+DEV/PROD:
+- SUPERADMIN_ID (ENV) всегда DEV: /start запускает регистрацию заново.
+- Все остальные: если уже registered/stage DONE, /start НЕ сбрасывает, а показывает меню.
 """
 
-from aiogram import Dispatcher, types
-from pathlib import Path
+import os
 import json
 import re
 from datetime import datetime
+from pathlib import Path
+
+from aiogram import Dispatcher, types
+from aiogram.dispatcher import FSMContext
 
 from LuckyBot.handlers.registration_api import fetch_company_raw
 from LuckyBot.handlers.registration_normalize import normalize_company
 from LuckyBot.handlers.registration_registry import upsert_company
-from LuckyBot.keyboards.main_menu import get_main_menu
+from LuckyBot.keyboards.main_menu import build_main_menu
+
+from AI.registration_guard import guard as registration_guard
+
+
+# ===============================
+# DATA
+# ===============================
 
 DATA_USERS = Path("/srv/luckypack/data/clients_registry/users")
 DATA_USERS.mkdir(parents=True, exist_ok=True)
 
-# ---------- утилиты ----------
+_GH_KEY = "guard_history"
+_GH_MAX = 6  # 3 пары user/bot
+
+
+# ===============================
+# UTILS
+# ===============================
+
+def _get_superadmin_id() -> int:
+    """
+    Берём SUPERADMIN_ID из ENV.
+    Поддерживаем несколько имён на случай разночтений.
+    """
+    for k in ("SUPERADMIN_ID", "SUPER_ADMIN_ID", "SUPERADMIN_TG_ID", "SUPER_ADMIN_TG_ID"):
+        v = os.getenv(k)
+        if v and v.strip().isdigit():
+            return int(v.strip())
+    return 0
+
 
 def _user_path(tg_id: int) -> Path:
     return DATA_USERS / f"tg_{tg_id}.json"
+
 
 def load_user(tg_id: int) -> dict:
     p = _user_path(tg_id)
@@ -44,8 +71,10 @@ def load_user(tg_id: int) -> dict:
         "slots": {
             "name": None,
             "inn": None,
+            "company_profile": None,
         },
     }
+
 
 def save_user(u: dict):
     u["updated_at"] = datetime.utcnow().isoformat()
@@ -54,123 +83,239 @@ def save_user(u: dict):
         encoding="utf-8"
     )
 
-def is_inn(text: str) -> bool:
-    return bool(re.fullmatch(r"\d{10}|\d{12}", text))
 
-# ---------- тексты (КАНОНИЧЕСКИЕ) ----------
+def is_inn(text: str) -> bool:
+    return bool(re.fullmatch(r"\d{10}|\d{12}", (text or "").strip()))
+
+
+def normalize_yes_no(text: str):
+    t = (text or "").strip().lower()
+    if t in {"да", "ok", "ок", "yes", "угу", "ага"}:
+        return True
+    if t in {"нет", "no", "неа"}:
+        return False
+    return None
+
+
+# ===============================
+# GUARD SHORT MEMORY
+# ===============================
+
+async def _gh_reset(state: FSMContext):
+    await state.update_data(**{_GH_KEY: []})
+
+
+async def _gh_get(state: FSMContext):
+    data = await state.get_data()
+    hist = data.get(_GH_KEY, [])
+    return hist if isinstance(hist, list) else []
+
+
+async def _gh_add(state: FSMContext, role: str, text: str):
+    text = (text or "").strip()
+    if not text:
+        return
+    hist = await _gh_get(state)
+    hist.append({"role": role, "text": text})
+    hist = hist[-_GH_MAX:]
+    await state.update_data(**{_GH_KEY: hist})
+
+
+# ===============================
+# TEXTS
+# ===============================
+
+POLICY_URL = "https://drive.google.com/file/d/1Ewc1vAbDsEcbonExfEvrflXFHnyhQ_LI/view?usp=drive_link"
 
 WELCOME_TEXT = (
-    "👋 Добро пожаловать в среду нейро-поддержки LuckyPack!\n\n"
-    "Чтобы воспользоваться всеми возможностями сервиса, "
-    "нам необходимо познакомиться поближе.\n\n"
-    "После этого Вам будут доступны:\n"
-    "• 📄 Скачать Прайсы\n"
-    "• 📥 Сделать Заказ\n"
-    "• 🔍 Подбор Товаров\n"
-    "• 🖼️ Подбор по Фото\n"
-    "• 🚚 Доставка и Сборка\n"
-    "• 📚 База Знаний\n"
-    "• 👤 Связь с Менеджером"
+    "Здравствуйте! 🙂\n"
+    "Рады приветствовать вас в среде нейро-поддержки компании Lucky Pack.\n\n"
+    "Чтобы предоставить Вам доступ ко всем возможностям сервиса, "
+    "нам необходимо познакомиться и определить вашу организацию. "
+    "Это займёт меньше минуты..."
 )
 
 ASK_NAME = "Как я могу к Вам обращаться?"
-ASK_INN = "Пожалуйста, пришлите ИНН вашей компании — 10–12 цифр."
-INN_NOT_FOUND = (
-    "По этому ИНН ничего не найдено.\n"
-    "Проверьте, пожалуйста, цифры и отправьте ИНН ещё раз."
+
+ASK_INN = (
+    "Пожалуйста, пришлите ИНН вашей организации (10–12 цифр).\n\n"
+    "<i>Отправляя ИНН, Вы подтверждаете согласие с «Политикой обработки данных».</i>\n"
+    f'<a href="{POLICY_URL}"><u>Ознакомиться с документом</u></a>'
 )
 
-CONFIRM_TEMPLATE = "Нашёл компанию:\n{title}\nИНН {inn}\n\nПодтвердите, пожалуйста: это Вы? (да/нет)"
+INN_NOT_FOUND = (
+    "По этому ИНН ничего не найдено.\n"
+    "Проверьте цифры и отправьте ещё раз."
+)
 
-REG_DONE = "Отлично, спасибо! Регистрация завершена ✅"
+CONFIRM_TEMPLATE = (
+    "Найдена организация:\n{title}\nИНН {inn}\n\n"
+    "Это Ваша компания? (да/нет)"
+)
 
-# ---------- хендлер ----------
+REG_DONE = "Отлично. Регистрация завершена! ✅\n"
+
+
+# ===============================
+# HANDLER
+# ===============================
 
 def register(dp: Dispatcher):
 
     @dp.message_handler(commands=["start"], state="*")
-    async def start(message: types.Message):
+    async def start(message: types.Message, state: FSMContext):
+
+        await _gh_reset(state)
+
+        superadmin_id = _get_superadmin_id()
+        is_superadmin = (superadmin_id != 0 and message.from_user.id == superadmin_id)
+
         u = load_user(message.from_user.id)
+
+        # PROD: уже зарегистрированным (НЕ супер-админу) не сбрасываем регистрацию
+        if (not is_superadmin) and (u.get("registered") is True or u.get("stage") == "DONE"):
+            name = (u.get("slots") or {}).get("name") or "друг"
+            msg = f"С возвращением, {name}! 🙂\nЧем могу быть полезен сегодня?"
+            await message.answer(msg, reply_markup=build_main_menu())
+            await _gh_add(state, "bot", msg)
+            return
+
+        # DEV (супер-админ) и незарегистрированные: начинаем регистрацию заново
         u["stage"] = "WAIT_NAME"
+        u["registered"] = False
         save_user(u)
 
         await message.answer(WELCOME_TEXT)
+        await _gh_add(state, "bot", WELCOME_TEXT)
+
         await message.answer(ASK_NAME)
+        await _gh_add(state, "bot", ASK_NAME)
 
     @dp.message_handler(state="*")
-    async def flow(message: types.Message):
-        text = (message.text or "").strip()
-        u = load_user(message.from_user.id)
+    async def flow(message: types.Message, state: FSMContext):
 
-        # ---- имя ----
+        text = (message.text or "").strip()
+        await _gh_add(state, "user", text)
+
+        u = load_user(message.from_user.id)
+        stage = u.get("stage") or "START"
+
+        # ===== Guard for deviations =====
+        need_guard = False
+        if stage == "WAIT_INN" and text and not is_inn(text):
+            need_guard = True
+        elif stage == "CONFIRM_COMPANY" and normalize_yes_no(text) is None:
+            need_guard = True
+        elif stage == "WAIT_NAME" and is_inn(text):
+            need_guard = True
+
+        if need_guard:
+            history = await _gh_get(state)
+            g = registration_guard(stage, text, history=history)
+
+            reply = (g.get("reply") or "").strip()
+            extracted = g.get("extracted") or {}
+
+            if extracted.get("name"):
+                u["slots"]["name"] = extracted["name"]
+                u["stage"] = "WAIT_INN"
+                save_user(u)
+
+            if extracted.get("inn") and is_inn(extracted["inn"]):
+                u["slots"]["inn"] = extracted["inn"]
+                u["stage"] = "WAIT_INN"
+                save_user(u)
+
+            if reply:
+                await message.answer(reply)
+                await _gh_add(state, "bot", reply)
+                return
+
+        # ===== WAIT_NAME =====
         if u["stage"] == "WAIT_NAME":
             u["slots"]["name"] = text
             u["stage"] = "WAIT_INN"
             save_user(u)
-            await message.answer(f"{text}, приятно познакомиться!\n{ASK_INN}")
+
+            msg = f"{text}, приятно познакомиться! 🙂\n\n{ASK_INN}"
+            await message.answer(msg)
+            await _gh_add(state, "bot", msg)
             return
 
-        # ---- ИНН ----
+        # ===== WAIT_INN =====
         if u["stage"] == "WAIT_INN":
+
             if not is_inn(text):
                 await message.answer(ASK_INN)
+                await _gh_add(state, "bot", ASK_INN)
                 return
+
+            inn = text.strip()
 
             try:
-                raw = fetch_company_raw(text)
-                profile = normalize_company(text)
+                fetch_company_raw(inn)
+                profile = normalize_company(inn)
             except Exception:
                 await message.answer(INN_NOT_FOUND)
+                await _gh_add(state, "bot", INN_NOT_FOUND)
                 return
 
-            title = (
-                profile.get("name_short_with_opf")
-                or profile.get("name_full_with_opf")
-                or profile.get("name_short")
-                or profile.get("name_full")
-                or "Компания"
-            )
-            u["slots"]["inn"] = text
+            u["slots"]["inn"] = inn
             u["slots"]["company_profile"] = profile
             u["stage"] = "CONFIRM_COMPANY"
             save_user(u)
 
-            await message.answer(CONFIRM_TEMPLATE.format(title=title, inn=text))
+            title = (
+                profile.get("name_short_with_opf")
+                or profile.get("name_short")
+                or profile.get("name_full_with_opf")
+                or profile.get("name_full")
+                or "Организация"
+            )
+
+            msg = CONFIRM_TEMPLATE.format(title=title, inn=inn)
+            await message.answer(msg)
+            await _gh_add(state, "bot", msg)
             return
 
-        # ---- подтверждение ----
+        # ===== CONFIRM =====
         if u["stage"] == "CONFIRM_COMPANY":
-            if text.lower() not in ("да", "нет"):
-                await message.answer("Пожалуйста, ответьте «да» или «нет».")
+
+            yn = normalize_yes_no(text)
+
+            if yn is None:
+                msg = "Пожалуйста, ответьте «да» или «нет»."
+                await message.answer(msg)
+                await _gh_add(state, "bot", msg)
                 return
 
-            if text.lower() == "нет":
-                u["slots"]["inn"] = None
-                u["slots"].pop("company_profile", None)
+            if not yn:
                 u["stage"] = "WAIT_INN"
                 save_user(u)
                 await message.answer(ASK_INN)
+                await _gh_add(state, "bot", ASK_INN)
                 return
 
-            # ДА → регистрация
-            profile = (u.get("slots") or {}).get("company_profile")
-            if not isinstance(profile, dict):
-                await message.answer(INN_NOT_FOUND)
-                u["stage"] = "WAIT_INN"
-                save_user(u)
-                return
-            upsert_company(profile)
+            profile = u["slots"].get("company_profile") or {}
+
+            try:
+                inn = u["slots"].get("inn")
+                if inn:
+                    upsert_company(profile)
+            except Exception:
+                pass
+
             u["registered"] = True
             u["stage"] = "DONE"
             save_user(u)
 
-            await message.answer(REG_DONE, reply_markup=get_main_menu())
+            await message.answer(REG_DONE, reply_markup=build_main_menu())
+            await _gh_add(state, "bot", REG_DONE)
             return
 
-        # ---- после регистрации ----
+        # ===== DONE =====
         if u["stage"] == "DONE":
-            await message.answer(
-                "Вы уже зарегистрированы. Выберите действие в меню ниже.",
-                reply_markup=get_main_menu()
-            )
+            msg = "Вы уже зарегистрированы."
+            await message.answer(msg, reply_markup=build_main_menu())
+            await _gh_add(state, "bot", msg)
             return
